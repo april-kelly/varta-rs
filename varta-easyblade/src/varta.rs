@@ -57,71 +57,140 @@ use varta_easyblade::Sdo;
 use varta_easyblade::SerialNumber;
 use varta_easyblade::SoftwareVersion;
 
-fn get_node_id_from_can_message(msg: &varta_easyblade_can_messages::Messages) -> Option<u8> {
-    match msg {
-        varta_easyblade_can_messages::Messages::Pack01PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack01Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack01Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack01Msgs(_) => Some(1),
-        varta_easyblade_can_messages::Messages::Pack02PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack02Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack02Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack02Msgs(_) => Some(2),
-        varta_easyblade_can_messages::Messages::Pack03PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack03Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack03Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack03Msgs(_) => Some(3),
-        varta_easyblade_can_messages::Messages::Pack04PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack04Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack04Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack04Msgs(_) => Some(4),
-        varta_easyblade_can_messages::Messages::Pack05PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack05Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack05Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack05Msgs(_) => Some(5),
-        varta_easyblade_can_messages::Messages::Pack06PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack06Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack06Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack06Msgs(_) => Some(6),
-        varta_easyblade_can_messages::Messages::Pack07PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack07Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack07Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack07Msgs(_) => Some(7),
-        varta_easyblade_can_messages::Messages::Pack08PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack08Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack08Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack08Msgs(_) => Some(8),
-        varta_easyblade_can_messages::Messages::Pack09PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack09Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack09Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack09Msgs(_) => Some(9),
-        varta_easyblade_can_messages::Messages::Pack10PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack10Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack10Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack10Msgs(_) => Some(10),
-        varta_easyblade_can_messages::Messages::Pack11PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack11Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack11Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack11Msgs(_) => Some(11),
-        varta_easyblade_can_messages::Messages::Pack12PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack12Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack12Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack12Msgs(_) => Some(12),
-        varta_easyblade_can_messages::Messages::Pack13PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack13Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack13Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack13Msgs(_) => Some(13),
-        varta_easyblade_can_messages::Messages::Pack14PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack14Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack14Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack14Msgs(_) => Some(14),
-        varta_easyblade_can_messages::Messages::Pack15PackInfo1(_)
-        | varta_easyblade_can_messages::Messages::Pack15Info2(_)
-        | varta_easyblade_can_messages::Messages::Pack15Info3(_)
-        | varta_easyblade_can_messages::Messages::Pack15Msgs(_) => Some(15),
-        _ => None,
+/// A master (pack-level) PDO message, as broadcast by the master module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MasterPdo {
+    /// `MasterPackInfo1`: pack voltage and current.
+    PackInfo1,
+    /// `MasterChargeControl`: charge voltage/current request and battery status.
+    ChargeControl,
+    /// `MasterPackInfo2`: max FET/cell temperature and design capacity.
+    PackInfo2,
+    /// `MasterPackInfo3`: full-charge and remaining capacity (SOC is derived from these).
+    PackInfo3,
+    /// `MasterErrorMsgs`: info/warning/error/charge bits.
+    ErrorMsgs,
+}
+
+/// A per-module PDO message, as broadcast by each Easyblade module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModulePdo {
+    /// `PACKnn_PackInfo1`: module voltage and current.
+    PackInfo1,
+    /// `PACKnn_Info2`: module temperatures and charge requests (currently not stored).
+    Info2,
+    /// `PACKnn_Info3`: module capacities (SOC and SOH are derived from these).
+    Info3,
+    /// `PACKnn_MSGS`: module info/warning/error/charge bits.
+    Msgs,
+}
+
+/// Which PDO a received CAN frame carried, i.e. which part of [`Varta`] it updated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PdoUpdate {
+    /// The frame updated [`Varta::master`].
+    Master(MasterPdo),
+    /// The frame updated `Varta::easyblades[node_id]`.
+    Module { node_id: u8, pdo: ModulePdo },
+}
+
+impl PdoUpdate {
+    /// The module this update belongs to, or `None` for master updates.
+    pub fn node_id(&self) -> Option<u8> {
+        match self {
+            PdoUpdate::Master(_) => None,
+            PdoUpdate::Module { node_id, .. } => Some(*node_id),
+        }
     }
-    .filter(|&n| n < MAX_MODULES as u8)
+}
+
+/// The outcome of processing one CAN frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameEvent {
+    /// `Some(node_id)` if the frame is the first one seen from that module
+    /// (either at startup or after the module was expired).
+    pub new_module: Option<u8>,
+    /// Which PDO the frame carried.
+    pub update: PdoUpdate,
+}
+
+// `classify_message` takes the node ID straight from the message name (the DBC
+// defines PACK01..=PACK15) and `handle_frame` indexes `easyblades` with it.
+const _: () = assert!(MAX_MODULES > 15, "MAX_MODULES must cover node IDs 1..=15");
+
+/// Maps a decoded CAN message to the part of [`Varta`] it updates.
+fn classify_message(msg: &varta_easyblade_can_messages::Messages) -> PdoUpdate {
+    use varta_easyblade_can_messages::Messages as M;
+
+    let (node_id, pdo) = match msg {
+        M::MasterPackInfo1(_) => return PdoUpdate::Master(MasterPdo::PackInfo1),
+        M::MasterChargeControl(_) => return PdoUpdate::Master(MasterPdo::ChargeControl),
+        M::MasterPackInfo2(_) => return PdoUpdate::Master(MasterPdo::PackInfo2),
+        M::MasterPackInfo3(_) => return PdoUpdate::Master(MasterPdo::PackInfo3),
+        M::MasterErrorMsgs(_) => return PdoUpdate::Master(MasterPdo::ErrorMsgs),
+        M::Pack01PackInfo1(_) => (1, ModulePdo::PackInfo1),
+        M::Pack01Info2(_) => (1, ModulePdo::Info2),
+        M::Pack01Info3(_) => (1, ModulePdo::Info3),
+        M::Pack01Msgs(_) => (1, ModulePdo::Msgs),
+        M::Pack02PackInfo1(_) => (2, ModulePdo::PackInfo1),
+        M::Pack02Info2(_) => (2, ModulePdo::Info2),
+        M::Pack02Info3(_) => (2, ModulePdo::Info3),
+        M::Pack02Msgs(_) => (2, ModulePdo::Msgs),
+        M::Pack03PackInfo1(_) => (3, ModulePdo::PackInfo1),
+        M::Pack03Info2(_) => (3, ModulePdo::Info2),
+        M::Pack03Info3(_) => (3, ModulePdo::Info3),
+        M::Pack03Msgs(_) => (3, ModulePdo::Msgs),
+        M::Pack04PackInfo1(_) => (4, ModulePdo::PackInfo1),
+        M::Pack04Info2(_) => (4, ModulePdo::Info2),
+        M::Pack04Info3(_) => (4, ModulePdo::Info3),
+        M::Pack04Msgs(_) => (4, ModulePdo::Msgs),
+        M::Pack05PackInfo1(_) => (5, ModulePdo::PackInfo1),
+        M::Pack05Info2(_) => (5, ModulePdo::Info2),
+        M::Pack05Info3(_) => (5, ModulePdo::Info3),
+        M::Pack05Msgs(_) => (5, ModulePdo::Msgs),
+        M::Pack06PackInfo1(_) => (6, ModulePdo::PackInfo1),
+        M::Pack06Info2(_) => (6, ModulePdo::Info2),
+        M::Pack06Info3(_) => (6, ModulePdo::Info3),
+        M::Pack06Msgs(_) => (6, ModulePdo::Msgs),
+        M::Pack07PackInfo1(_) => (7, ModulePdo::PackInfo1),
+        M::Pack07Info2(_) => (7, ModulePdo::Info2),
+        M::Pack07Info3(_) => (7, ModulePdo::Info3),
+        M::Pack07Msgs(_) => (7, ModulePdo::Msgs),
+        M::Pack08PackInfo1(_) => (8, ModulePdo::PackInfo1),
+        M::Pack08Info2(_) => (8, ModulePdo::Info2),
+        M::Pack08Info3(_) => (8, ModulePdo::Info3),
+        M::Pack08Msgs(_) => (8, ModulePdo::Msgs),
+        M::Pack09PackInfo1(_) => (9, ModulePdo::PackInfo1),
+        M::Pack09Info2(_) => (9, ModulePdo::Info2),
+        M::Pack09Info3(_) => (9, ModulePdo::Info3),
+        M::Pack09Msgs(_) => (9, ModulePdo::Msgs),
+        M::Pack10PackInfo1(_) => (10, ModulePdo::PackInfo1),
+        M::Pack10Info2(_) => (10, ModulePdo::Info2),
+        M::Pack10Info3(_) => (10, ModulePdo::Info3),
+        M::Pack10Msgs(_) => (10, ModulePdo::Msgs),
+        M::Pack11PackInfo1(_) => (11, ModulePdo::PackInfo1),
+        M::Pack11Info2(_) => (11, ModulePdo::Info2),
+        M::Pack11Info3(_) => (11, ModulePdo::Info3),
+        M::Pack11Msgs(_) => (11, ModulePdo::Msgs),
+        M::Pack12PackInfo1(_) => (12, ModulePdo::PackInfo1),
+        M::Pack12Info2(_) => (12, ModulePdo::Info2),
+        M::Pack12Info3(_) => (12, ModulePdo::Info3),
+        M::Pack12Msgs(_) => (12, ModulePdo::Msgs),
+        M::Pack13PackInfo1(_) => (13, ModulePdo::PackInfo1),
+        M::Pack13Info2(_) => (13, ModulePdo::Info2),
+        M::Pack13Info3(_) => (13, ModulePdo::Info3),
+        M::Pack13Msgs(_) => (13, ModulePdo::Msgs),
+        M::Pack14PackInfo1(_) => (14, ModulePdo::PackInfo1),
+        M::Pack14Info2(_) => (14, ModulePdo::Info2),
+        M::Pack14Info3(_) => (14, ModulePdo::Info3),
+        M::Pack14Msgs(_) => (14, ModulePdo::Msgs),
+        M::Pack15PackInfo1(_) => (15, ModulePdo::PackInfo1),
+        M::Pack15Info2(_) => (15, ModulePdo::Info2),
+        M::Pack15Info3(_) => (15, ModulePdo::Info3),
+        M::Pack15Msgs(_) => (15, ModulePdo::Msgs),
+    };
+
+    PdoUpdate::Module { node_id, pdo }
 }
 
 #[derive(Debug)]
@@ -166,17 +235,17 @@ impl Varta {
         Ok(varta)
     }
 
-    fn handle_frame(&mut self, can_frame: socketcan::frame::CanFrame) -> Result<Option<u8>, Error> {
+    fn handle_frame(&mut self, can_frame: socketcan::frame::CanFrame) -> Result<FrameEvent, Error> {
         let msg = crate::varta_easyblade_can_messages::Messages::from_can_message(
             can_frame.id(),
             can_frame.data(),
         )?;
 
-        let node_id = get_node_id_from_can_message(&msg);
+        let update = classify_message(&msg);
 
         let mut new_module: Option<u8> = None;
 
-        if let Some(node_id) = node_id {
+        if let Some(node_id) = update.node_id() {
             let was_new = self.easyblades[node_id as usize].is_none();
             let easyblade = self.get_or_init_easyblade(node_id);
             if was_new {
@@ -1208,36 +1277,38 @@ impl Varta {
 
         self.expire_missing_modules();
 
-        Ok(new_module)
+        Ok(FrameEvent { new_module, update })
     }
 
     // Process up to `max_to_process` CAN messages. Returns early if
     // it discovers a new node, or if there are no more CAN frames
     // to process.
-    pub fn process_socketcan_messages(&mut self, max_to_process: usize) -> Result<Option<u8>, Error> {
+    pub fn process_socketcan_messages(
+        &mut self,
+        max_to_process: usize,
+    ) -> Result<Option<u8>, Error> {
         for _ in 0..max_to_process {
             match self.socketcan_interface.try_read_frame() {
                 Ok(frame) => {
-                    match self.handle_frame(frame) {
-                        Ok(Some(new_node)) => return Ok(Some(new_node)),
-                        Ok(None) => (),
-                        Err(e) => return Err(e),
+                    if let Some(new_node) = self.handle_frame(frame)?.new_module {
+                        return Ok(Some(new_node));
                     }
-                }
+                },
                 Err(e) => {
                     return Err(Error::Io {
                         can_interface: self.canbus_interface.clone(),
                         e,
                     });
-                }
+                },
             }
         }
         println!("read all {max_to_process}!");
         Ok(None)
     }
 
-    // Wait for an process one CAN frame.
-    pub async fn process_socketcan_msg(&mut self) -> Result<Option<u8>, Error> {
+    /// Wait for and process one CAN frame, reporting which PDO it carried
+    /// (and therefore which part of `self` it updated).
+    pub async fn process_socketcan_frame(&mut self) -> Result<FrameEvent, Error> {
         let can_frame = self
             .socketcan_interface
             .read_frame()
@@ -1247,6 +1318,13 @@ impl Varta {
                 e,
             })?;
         self.handle_frame(can_frame)
+    }
+
+    /// Wait for and process one CAN frame. Returns the node ID if the frame
+    /// revealed a new module. See [`Self::process_socketcan_frame`] for a
+    /// variant that also reports what the frame updated.
+    pub async fn process_socketcan_msg(&mut self) -> Result<Option<u8>, Error> {
+        Ok(self.process_socketcan_frame().await?.new_module)
     }
 
     /// Expire any modules that have not reported in the last 10 seconds.

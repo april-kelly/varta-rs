@@ -12,7 +12,7 @@ clap = { version = "4.5.37", features = ["derive"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 varta-easyblade = { path = "../varta-easyblade" }
 zencan-client = { git = "https://github.com/mcbridejc/zencan.git", rev="c8eb8f44548cd5515496fa0e385083a839674c14", features = ["socketcan"] }

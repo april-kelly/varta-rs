@@ -1,4 +1,8 @@
 pub mod varta;
+pub use varta::FrameEvent;
+pub use varta::MasterPdo;
+pub use varta::ModulePdo;
+pub use varta::PdoUpdate;
 pub use varta::SdoSession;
 pub use varta::Varta;
 
