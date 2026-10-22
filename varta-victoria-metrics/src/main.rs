@@ -35,6 +35,11 @@ struct Args {
     /// The CAN interface to connect to (e.g. 'can0' or 'vcan0').
     #[arg(long, default_value_t = String::from("can0"))]
     canbus: String,
+
+    /// Log the body of every request sent to Victoria Metrics (JSON lines) to
+    /// standard output.
+    #[arg(long)]
+    log_requests: bool,
 }
 
 #[derive(Debug)]
@@ -66,18 +71,26 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-/// Posts `points` to Victoria Metrics in a single request.
+/// Posts `points` to Victoria Metrics in a single request. With `log_requests`
+/// the request body is also written to standard output.
 async fn send_metrics(
     client: &Client,
     vm_url: &str,
     battery_name: &str,
     points: &[MetricPoint],
+    log_requests: bool,
 ) -> Result<(), String> {
-    let mut import_body = Vec::new();
+    let mut import_body = String::new();
     for p in points {
-        serde_json::to_writer(&mut import_body, &p.to_import_line(battery_name))
-            .map_err(|e| e.to_string())?;
-        import_body.push(b'\n');
+        let line =
+            serde_json::to_string(&p.to_import_line(battery_name)).map_err(|e| e.to_string())?;
+        import_body.push_str(&line);
+        import_body.push('\n');
+    }
+
+    if log_requests {
+        // The body is newline terminated already.
+        print!("{}", import_body);
     }
 
     client
@@ -102,11 +115,12 @@ async fn send_metrics_task(
     client: Client,
     vm_url: String,
     battery_name: String,
+    log_requests: bool,
     mut rx: mpsc::Receiver<MetricPoint>,
 ) {
     let mut batch = Vec::with_capacity(MAX_POINTS_PER_REQUEST);
     while rx.recv_many(&mut batch, MAX_POINTS_PER_REQUEST).await > 0 {
-        if let Err(e) = send_metrics(&client, &vm_url, &battery_name, &batch).await {
+        if let Err(e) = send_metrics(&client, &vm_url, &battery_name, &batch, log_requests).await {
             eprintln!("Error sending {} metric(s): {}", batch.len(), e);
         }
         batch.clear();
@@ -317,6 +331,7 @@ async fn main() {
         client,
         args.vm_url.clone(),
         args.battery_name.clone(),
+        args.log_requests,
         metrics_rx,
     ));
     let mut metrics = MetricQueue::new(metrics_tx);
