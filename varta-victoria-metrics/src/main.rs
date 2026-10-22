@@ -1,5 +1,6 @@
 use clap::Parser;
 use reqwest::Client;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -40,6 +41,17 @@ struct Args {
     /// standard output.
     #[arg(long)]
     log_requests: bool,
+
+    /// Resend a metric whose value hasn't changed after this many seconds. Changed
+    /// values are always sent right away; 0 sends every value as it is received.
+    #[arg(long, default_value = "60", value_parser = parse_seconds)]
+    resend_interval: Duration,
+}
+
+/// Parses a number of seconds (e.g. "60" or "2.5") into a `Duration`.
+fn parse_seconds(s: &str) -> Result<Duration, String> {
+    let secs = s.parse::<f64>().map_err(|e| e.to_string())?;
+    Duration::try_from_secs_f64(secs).map_err(|e| e.to_string())
 }
 
 #[derive(Debug)]
@@ -162,6 +174,39 @@ impl MetricQueue {
                 std::process::exit(1);
             },
         }
+    }
+}
+
+/// Remembers the last value sent for every metric, so that a value is only sent
+/// when it changes or when the metric hasn't been sent for `resend_interval`.
+struct ChangeFilter {
+    resend_interval_ms: i64,
+    /// Value and timestamp of the last point sent, per metric name.
+    last_sent: HashMap<String, (f64, i64)>,
+}
+
+impl ChangeFilter {
+    fn new(resend_interval: Duration) -> Self {
+        Self {
+            resend_interval_ms: resend_interval.as_millis() as i64,
+            last_sent: HashMap::new(),
+        }
+    }
+
+    /// Returns whether `point` should be sent, and if so records it as the last
+    /// point sent for its metric.
+    fn should_send(&mut self, point: &MetricPoint) -> bool {
+        let send = match self.last_sent.get(&point.metric) {
+            Some(&(value, timestamp)) => {
+                value != point.value || point.timestamp - timestamp >= self.resend_interval_ms
+            },
+            None => true,
+        };
+        if send {
+            self.last_sent
+                .insert(point.metric.clone(), (point.value, point.timestamp));
+        }
+        send
     }
 }
 
@@ -335,6 +380,7 @@ async fn main() {
         metrics_rx,
     ));
     let mut metrics = MetricQueue::new(metrics_tx);
+    let mut filter = ChangeFilter::new(args.resend_interval);
 
     let mut serial_number_retry = tokio::time::interval(SERIAL_NUMBER_RETRY_INTERVAL);
     let mut expire_timer = Box::pin(tokio::time::sleep(varta.next_expiry_delay()));
@@ -356,9 +402,11 @@ async fn main() {
                     try_read_serial_number(&mut varta, &args.canbus, node_id).await;
                 }
 
-                // Send whatever this frame updated, right away.
+                // Send what this frame changed (or hasn't been resent in a while), right away.
                 for point in metrics_for_update(&varta, event.update, received_at) {
-                    metrics.push(point);
+                    if filter.should_send(&point) {
+                        metrics.push(point);
+                    }
                 }
 
                 expire_timer = Box::pin(tokio::time::sleep(varta.next_expiry_delay()));
